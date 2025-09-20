@@ -252,6 +252,29 @@ function calculateResults() {
   };
 }
 
+socket.on("teacher:request-history", () => {
+  socket.emit("teacher:poll-history", pollHistory);
+});
+
+socket.on("student:request-history", () => {
+  const studentId = Array.from(connectedStudents.entries())
+    .find(([id, s]) => s.socketId === socket.id)?.[0];
+
+  if (!studentId) return;
+
+  const history = pollHistory.map(poll => {
+    const answer = poll.studentAnswers?.find(a => a.sessionId === studentId);
+    return {
+      question: poll.question,
+      selectedOption: answer?.selectedOption || "No answer",
+      isCorrect: answer?.isCorrect || false
+    };
+  });
+
+  socket.emit("student:poll-history", history);
+});
+``
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

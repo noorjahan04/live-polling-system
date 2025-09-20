@@ -4,7 +4,7 @@ import ChatBox from "./ChatBox";
 import PollResults from "./PollResults";
 import { FaPlus, FaEye, FaCommentDots } from "react-icons/fa";
 
-const socket = io(import.meta.env.VITE_BACKEND_URL || "http://localhost:3001");
+const socket = io(import.meta.env.VITE_BACKEND_URL || "https://backend-1-2-jja6.onrender.com");
 
 export default function TeacherPanel() {
   const [question, setQuestion] = useState("");

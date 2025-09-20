@@ -4,7 +4,7 @@ import ChatBox from "./ChatBox";
 import PollResults from "./PollResults";
 import { SparklesIcon } from "@heroicons/react/24/solid";
 
-const socket = io(import.meta.env.VITE_BACKEND_URL || "http://localhost:3001");
+const socket = io(import.meta.env.VITE_BACKEND_URL || "https://backend-1-2-jja6.onrender.com");
 
 export default function StudentPanel() {
   const [name, setName] = useState("");

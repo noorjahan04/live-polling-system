@@ -5,14 +5,22 @@ import cors from 'cors';
 
 const app = express();
 const server = createServer(app);
+
+// === CORS Setup ===
+const FRONTEND_URL = "https://live-polling-system-roan.vercel.app"; // No trailing slash
+
 const io = new Server(server, {
   cors: {
-    origin: "https://live-polling-system-roan.vercel.app/",
+    origin: FRONTEND_URL,
     methods: ["GET", "POST"]
   }
 });
 
-app.use(cors());
+// Express CORS
+app.use(cors({
+  origin: FRONTEND_URL,
+  methods: ["GET", "POST"]
+}));
 app.use(express.json());
 
 // In-memory storage
@@ -24,13 +32,15 @@ let teacherSocket = null;
 // Generate unique IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+// === Socket.IO Connection ===
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  // Teacher joins
+  // === Teacher joins ===
   socket.on('teacher:join', () => {
     teacherSocket = socket;
     socket.join('teacher');
+    console.log('Teacher joined:', socket.id);
     socket.emit('teacher:joined', {
       currentPoll,
       students: Array.from(connectedStudents.values()),
@@ -38,7 +48,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Student joins
+  // === Student joins ===
   socket.on('student:join', (data) => {
     const { name, sessionId } = data;
     const student = {
@@ -48,15 +58,19 @@ io.on('connection', (socket) => {
       connected: true,
       answered: currentPoll ? false : null
     };
-    
+
     connectedStudents.set(sessionId, student);
     socket.join('students');
-    
+
+    console.log(`Student joined: ${name} (${sessionId})`);
+
     socket.emit('student:joined', {
       sessionId,
       currentPoll: currentPoll ? {
         ...currentPoll,
-        timeLeft: currentPoll.startTime ? Math.max(0, currentPoll.timeLimit - Math.floor((Date.now() - currentPoll.startTime) / 1000)) : currentPoll.timeLimit
+        timeLeft: currentPoll.startTime
+          ? Math.max(0, currentPoll.timeLimit - Math.floor((Date.now() - currentPoll.startTime) / 1000))
+          : currentPoll.timeLimit
       } : null
     });
 
@@ -68,7 +82,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Teacher creates poll
+  // === Teacher creates poll ===
   socket.on('teacher:create-poll', (data) => {
     if (currentPoll && currentPoll.status === 'active') {
       socket.emit('error', { message: 'Poll is currently active' });
@@ -90,31 +104,30 @@ io.on('connection', (socket) => {
     };
 
     currentPoll = poll;
+    console.log('Poll created:', poll);
     socket.emit('poll:created', poll);
   });
 
-  // Teacher starts poll
+  // === Teacher starts poll ===
   socket.on('teacher:start-poll', () => {
     if (!currentPoll || currentPoll.status === 'active') return;
 
     currentPoll.status = 'active';
     currentPoll.startTime = Date.now();
 
-    // Reset student answered status
     connectedStudents.forEach(student => {
       student.answered = false;
     });
 
-    // Broadcast to all students
     io.to('students').emit('poll:started', {
       ...currentPoll,
       timeLeft: currentPoll.timeLimit
     });
 
-    // Notify teacher
     socket.emit('poll:started', currentPoll);
 
-    // Start timer
+    console.log('Poll started:', currentPoll.id);
+
     setTimeout(() => {
       if (currentPoll && currentPoll.status === 'active') {
         endCurrentPoll();
@@ -122,86 +135,63 @@ io.on('connection', (socket) => {
     }, currentPoll.timeLimit * 1000);
   });
 
-  // Student submits answer
-  socket.on('student:submit-answer', (data) => {
-    const { sessionId, optionId } = data;
-    
+  // === Student submits answer ===
+  socket.on('student:submit-answer', ({ sessionId, optionId }) => {
     if (!currentPoll || currentPoll.status !== 'active') return;
 
     const student = connectedStudents.get(sessionId);
     if (!student || student.answered) return;
 
-    // Record vote
     const option = currentPoll.options.find(opt => opt.id === optionId);
     if (option) {
       option.votes.push(sessionId);
       student.answered = true;
 
-      // Check if all students answered
+      console.log(`Student ${student.name} answered option ${optionId}`);
+
       const allAnswered = Array.from(connectedStudents.values())
         .filter(s => s.connected)
         .every(s => s.answered);
 
-      // Broadcast updated results
-      const results = calculateResults();
-      io.emit('poll:results-updated', results);
+      io.emit('poll:results-updated', calculateResults());
 
-      if (allAnswered) {
-        endCurrentPoll();
-      }
+      if (allAnswered) endCurrentPoll();
     }
   });
 
-  // Chat message
+  // === Chat messages ===
   socket.on('chat:message', (data) => {
-    const { message, sender, senderType } = data;
-    io.emit('chat:message', {
-      message,
-      sender,
-      senderType,
-      timestamp: Date.now()
-    });
+    io.emit('chat:message', { ...data, timestamp: Date.now() });
   });
 
-  // Teacher removes student
-  socket.on('teacher:remove-student', (data) => {
-    const { sessionId } = data;
+  // === Teacher removes student ===
+  socket.on('teacher:remove-student', ({ sessionId }) => {
     const student = connectedStudents.get(sessionId);
-    
     if (student) {
-      // Find and disconnect student socket
       const studentSocket = io.sockets.sockets.get(student.socketId);
       if (studentSocket) {
         studentSocket.emit('student:kicked');
         studentSocket.disconnect();
       }
-      
       connectedStudents.delete(sessionId);
-      
-      // Notify teacher
       socket.emit('student:removed', {
         students: Array.from(connectedStudents.values())
       });
     }
   });
 
-  // Teacher ends poll manually
+  // === Teacher ends poll manually ===
   socket.on('teacher:end-poll', () => {
-    if (currentPoll && currentPoll.status === 'active') {
-      endCurrentPoll();
-    }
+    if (currentPoll && currentPoll.status === 'active') endCurrentPoll();
   });
 
-  // Disconnect
+  // === Disconnect ===
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
 
-    // Remove student if disconnected
     for (const [sessionId, student] of connectedStudents.entries()) {
       if (student.socketId === socket.id) {
         connectedStudents.delete(sessionId);
-        
-        // Notify teacher
         if (teacherSocket) {
           teacherSocket.emit('student:disconnected', {
             students: Array.from(connectedStudents.values())
@@ -211,48 +201,42 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Clear teacher socket
-    if (teacherSocket?.id === socket.id) {
-      teacherSocket = null;
-    }
+    if (teacherSocket?.id === socket.id) teacherSocket = null;
   });
 });
 
+// === Poll helper functions ===
 function endCurrentPoll() {
   if (!currentPoll) return;
 
   currentPoll.status = 'ended';
   currentPoll.endTime = Date.now();
-
-  // Add to history
   pollHistory.push({ ...currentPoll });
 
-  const results = calculateResults();
-  io.emit('poll:ended', results);
+  console.log('Poll ended:', currentPoll.id);
 
+  io.emit('poll:ended', calculateResults());
   currentPoll = null;
 }
 
 function calculateResults() {
   if (!currentPoll) return null;
 
-  const totalVotes = currentPoll.options.reduce((sum, option) => sum + option.votes.length, 0);
-  
+  const totalVotes = currentPoll.options.reduce((sum, opt) => sum + opt.votes.length, 0);
   return {
     id: currentPoll.id,
     question: currentPoll.question,
-    options: currentPoll.options.map(option => ({
-      id: option.id,
-      text: option.text,
-      votes: option.votes.length,
-      percentage: totalVotes > 0 ? Math.round((option.votes.length / totalVotes) * 100) : 0
+    options: currentPoll.options.map(opt => ({
+      id: opt.id,
+      text: opt.text,
+      votes: opt.votes.length,
+      percentage: totalVotes > 0 ? Math.round((opt.votes.length / totalVotes) * 100) : 0
     })),
     totalVotes,
     status: currentPoll.status
   };
 }
 
+// === Render port ===
 const PORT = process.env.PORT || 3600;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
